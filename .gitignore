@@ -1,0 +1,33 @@
+# Configuration with credentials
+config.json
+
+# Original HTML file with credentials
+b.html
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Downloaded files
+*.ts
+*.mp4
+*.mkv
