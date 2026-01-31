@@ -7,6 +7,7 @@ Command-line version of the HTML-based generator
 import json
 import sys
 import os
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import urllib.request
@@ -25,6 +26,8 @@ except ImportError:
 
 
 class CatchupGenerator:
+    CACHE_EXPIRY_HOURS = 1
+
     def __init__(self, config_file="config.json"):
         # If relative path, look in the script's directory (resolve symlinks)
         if not os.path.isabs(config_file):
@@ -32,9 +35,44 @@ class CatchupGenerator:
             script_path = os.path.realpath(__file__)
             script_dir = os.path.dirname(script_path)
             self.config_file = os.path.join(script_dir, config_file)
+            self.cache_file = os.path.join(script_dir, ".catchup_cache.json")
         else:
             self.config_file = config_file
+            self.cache_file = os.path.join(os.path.dirname(config_file), ".catchup_cache.json")
         self.config = self.load_config()
+        self.cache = self.load_cache()
+
+    def load_cache(self):
+        """Load cached selections if they exist and are recent"""
+        if not os.path.exists(self.cache_file):
+            return {}
+        try:
+            with open(self.cache_file, 'r') as f:
+                cache = json.load(f)
+            # Check if cache is expired
+            cached_time = datetime.fromisoformat(cache.get('timestamp', '2000-01-01'))
+            if datetime.now() - cached_time > timedelta(hours=self.CACHE_EXPIRY_HOURS):
+                return {}
+            return cache
+        except (json.JSONDecodeError, ValueError):
+            return {}
+
+    def save_cache(self, category_id, category_name, stream_id, stream_name, date_str, time_str):
+        """Save current selections to cache"""
+        cache = {
+            'timestamp': datetime.now().isoformat(),
+            'category_id': category_id,
+            'category_name': category_name,
+            'stream_id': stream_id,
+            'stream_name': stream_name,
+            'date': date_str,
+            'time': time_str
+        }
+        try:
+            with open(self.cache_file, 'w') as f:
+                json.dump(cache, f)
+        except Exception:
+            pass  # Silently fail on cache write errors
 
     def load_config(self):
         """Load configuration from JSON file"""
@@ -62,10 +100,13 @@ class CatchupGenerator:
     def fetch_json(self, url):
         """Fetch JSON data from URL"""
         try:
-            with urllib.request.urlopen(url, timeout=10) as response:
+            req = urllib.request.Request(url)
+            req.add_header('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+            with urllib.request.urlopen(req, timeout=10) as response:
                 return json.loads(response.read().decode())
         except Exception as e:
             print(f"⛔ Error fetching data: {e}")
+            print(f"   URL: {url}")
             return None
 
     def get_categories(self):
@@ -167,48 +208,117 @@ class CatchupGenerator:
                 os.remove(temp_output)
             return False
 
-    def download_file(self, url, filename):
-        """Download file using wget or urllib"""
-        print(f"\nDownloading: {filename}\n")
+    def download_file(self, url, filename, chunk_percent=10, duration_minutes=30):
+        """Download file using wget with chunked restarts to avoid throttling"""
+        print(f"\nDownloading: {filename}")
+        print(f"Restarting every {chunk_percent}% to avoid bandwidth throttling\n")
 
-        # Check if wget is available
-        if shutil.which('wget'):
-            try:
-                # Use wget with clean progress bar (suppress verbose output)
-                result = subprocess.run(
-                    ['wget', '-q', '--show-progress', '-O', filename, url],
-                    check=True
-                )
-                print(f"\n✅ Download complete: {filename}\n")
-                return True
-            except subprocess.CalledProcessError as e:
-                print(f"⛔ Download failed: {e}\n")
-                return False
-        else:
-            # Fallback to urllib
-            try:
-                def progress_hook(block_num, block_size, total_size):
-                    if total_size > 0:
-                        percent = min(100, (block_num * block_size * 100) // total_size)
-                        bar_length = 40
-                        filled = int(bar_length * percent / 100)
-                        bar = '█' * filled + '░' * (bar_length - filled)
-                        mb_downloaded = (block_num * block_size) / (1024 * 1024)
-                        mb_total = total_size / (1024 * 1024)
-                        print(f'\r{bar} {percent}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)', end='', flush=True)
+        if not shutil.which('wget'):
+            print("⛔ wget is required for downloads. Install with: brew install wget")
+            return False
 
-                urllib.request.urlretrieve(url, filename, reporthook=progress_hook)
-                print(f"\n✅ Download complete: {filename}\n")
-                return True
-            except Exception as e:
-                print(f"⛔ Download failed: {e}\n")
+        # Initialize tracking
+        chunk_num = 0
+        last_restart_percent = 0
+        total_start_time = time.time()
+        initial_size = os.path.getsize(filename) if os.path.exists(filename) else 0
+
+        download_complete = False
+
+        while not download_complete:
+            chunk_num += 1
+            target_percent = min(last_restart_percent + chunk_percent, 100)
+            chunk_start_time = time.time()
+            chunk_start_size = os.path.getsize(filename) if os.path.exists(filename) else 0
+            we_terminated = False
+
+            print(f"Chunk {chunk_num}: {last_restart_percent}% -> {target_percent}%")
+
+            # Start wget with progress output
+            if chunk_num == 1 and not os.path.exists(filename):
+                cmd = ['wget', '--progress=dot:mega', '-O', filename, url]
+            else:
+                cmd = ['wget', '--progress=dot:mega', '-c', '-O', filename, url]
+
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1
+            )
+
+            current_percent = last_restart_percent
+            try:
+                for line in process.stdout:
+                    # Parse wget's dot progress output for percentage and speed
+                    # Format: "    50M .......... .......... .......... ..........  73% 10.2M"
+                    match = re.search(r'\s(\d+)%\s+([\d.]+[KMG]?)', line)
+                    if match:
+                        current_percent = int(match.group(1))
+                        current_speed = match.group(2)
+
+                        # Calculate chunk average
+                        chunk_elapsed = time.time() - chunk_start_time
+                        current_size = os.path.getsize(filename) if os.path.exists(filename) else 0
+                        chunk_downloaded = current_size - chunk_start_size
+                        chunk_avg_mbps = chunk_downloaded / chunk_elapsed / (1024 * 1024) if chunk_elapsed > 0 else 0
+
+                        # Calculate overall average
+                        total_elapsed = time.time() - total_start_time
+                        total_downloaded = current_size - initial_size
+                        overall_avg_mbps = total_downloaded / total_elapsed / (1024 * 1024) if total_elapsed > 0 else 0
+
+                        # Show progress
+                        print(f"\r  Progress: {current_percent}% | "
+                              f"Speed: {current_speed}B/s | "
+                              f"Chunk avg: {chunk_avg_mbps:.1f} MB/s | "
+                              f"Overall avg: {overall_avg_mbps:.1f} MB/s   ", end='', flush=True)
+
+                        # Check if we hit target percentage
+                        if current_percent >= target_percent and current_percent < 100:
+                            print()  # New line
+                            process.terminate()
+                            try:
+                                process.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                            we_terminated = True
+                            last_restart_percent = current_percent
+                            break
+
+                # Process ended - check why
+                if not we_terminated:
+                    exit_code = process.poll()
+                    if exit_code == 0 or current_percent >= 100:
+                        print()  # New line after progress
+                        download_complete = True
+                    elif exit_code is not None and exit_code != 0:
+                        print(f"\n⛔ Download failed with exit code {exit_code}")
+                        return False
+
+            except KeyboardInterrupt:
+                process.terminate()
+                current_size = os.path.getsize(filename) if os.path.exists(filename) else 0
+                print(f"\n\n⚠️  Download interrupted at {current_size / (1024 * 1024):.1f} MB")
+                print(f"💡 Resume with: wget -c -O '{filename}' '{url}'")
                 return False
+
+        # Final stats
+        final_size = os.path.getsize(filename) if os.path.exists(filename) else 0
+        total_elapsed = time.time() - total_start_time
+        total_downloaded = final_size - initial_size
+        overall_avg_speed = total_downloaded / total_elapsed / (1024 * 1024) if total_elapsed > 0 else 0
+
+        print(f"\n✅ Download complete: {filename}")
+        print(f"   Size: {final_size / (1024 * 1024):.1f} MB | Time: {total_elapsed:.0f}s | Avg speed: {overall_avg_speed:.1f} MB/s")
+        print(f"   Chunks: {chunk_num} (restarted {chunk_num - 1} times)\n")
+        return True
 
     def generate_url(self, stream_id, start_datetime, duration_minutes):
         """Generate the catchup URL"""
         # Adjust for BST if needed
         if self.is_bst(start_datetime):
-            from datetime import timedelta
             start_datetime = start_datetime - timedelta(hours=1)
             print("🇬🇧 BST detected – 1 hour was subtracted from the time.")
 
@@ -216,10 +326,18 @@ class CatchupGenerator:
         url = f"{self.config['archiveBase']}/{self.config['username']}/{self.config['password']}/{duration_minutes}/{start_str}/{stream_id}.ts"
         return url
 
-    def select_from_list_interactive(self, items, title, name_key='name'):
+    def select_from_list_interactive(self, items, title, name_key='name', default_value=None, id_key=None):
         """Interactive selection using arrow keys"""
         if not INTERACTIVE_MODE:
-            return self.select_from_list_fallback(items, title, name_key)
+            return self.select_from_list_fallback(items, title, name_key, default_value, id_key)
+
+        # Find default cursor position
+        cursor_index = 0
+        if default_value and id_key:
+            for i, item in enumerate(items):
+                if item.get(id_key) == default_value:
+                    cursor_index = i
+                    break
 
         # Replace | with a visual separator to avoid column splitting
         options = [item[name_key].replace('|', ' │ ') for item in items]
@@ -233,6 +351,7 @@ class CatchupGenerator:
             clear_screen=False,
             multi_select=False,
             show_multi_select_hint=False,
+            cursor_index=cursor_index,
         )
 
         menu_entry_index = terminal_menu.show()
@@ -243,17 +362,33 @@ class CatchupGenerator:
 
         return items[menu_entry_index]
 
-    def select_from_list_fallback(self, items, title, name_key='name'):
+    def select_from_list_fallback(self, items, title, name_key='name', default_value=None, id_key=None):
         """Fallback selection for when simple-term-menu is not installed"""
+        # Find default index
+        default_idx = None
+        if default_value and id_key:
+            for i, item in enumerate(items):
+                if item.get(id_key) == default_value:
+                    default_idx = i + 1
+                    break
+
         print(f"\n{title}")
         print("-" * 60)
         for idx, item in enumerate(items, 1):
-            print(f"  {idx}. {item[name_key]}")
+            marker = " *" if idx == default_idx else ""
+            print(f"  {idx}. {item[name_key]}{marker}")
         print()
+
+        prompt = f"Select (1-{len(items)})"
+        if default_idx:
+            prompt += f" [default: {default_idx}]"
+        prompt += ": "
 
         while True:
             try:
-                choice = input(f"Select (1-{len(items)}): ").strip()
+                choice = input(prompt).strip()
+                if not choice and default_idx:
+                    return items[default_idx - 1]
                 idx = int(choice) - 1
                 if 0 <= idx < len(items):
                     return items[idx]
@@ -301,11 +436,24 @@ class CatchupGenerator:
                     print("\n👋 Goodbye!")
                     sys.exit(0)
 
-    def get_time_input(self):
+    def get_time_input(self, default_time=None):
         """Get time in 24h format without colon (e.g., 1745)"""
         while True:
             try:
-                time_str = input("\nEnter time (24h format, e.g., 1745 for 5:45 PM): ").strip()
+                prompt = "\nEnter time (24h format, e.g., 1745 for 5:45 PM)"
+                if default_time:
+                    prompt += f" [{default_time[:2]}:{default_time[2:]}]"
+                prompt += ": "
+
+                time_str = input(prompt).strip()
+
+                # Use default if empty and default exists
+                if not time_str and default_time:
+                    time_str = default_time
+
+                if not time_str:
+                    print("⛔ Please enter a time")
+                    continue
 
                 # Remove any colons if user includes them
                 time_str = time_str.replace(':', '')
@@ -340,6 +488,10 @@ class CatchupGenerator:
         print("=" * 60)
         print()
 
+        # Show cache info if available
+        if self.cache:
+            print(f"💡 Last session: {self.cache.get('stream_name', 'Unknown')} (press Enter to reuse)\n")
+
         # Get categories
         print("Loading categories...")
         categories = self.get_categories()
@@ -348,11 +500,13 @@ class CatchupGenerator:
         if INTERACTIVE_MODE:
             print("💡 Use arrow keys to navigate, Enter to select, q to quit\n")
 
-        # Select category
+        # Select category (with cached default)
         selected_category = self.select_from_list_interactive(
             categories,
             "Select a Category:",
-            'category_name'
+            'category_name',
+            default_value=self.cache.get('category_id'),
+            id_key='category_id'
         )
 
         print(f"\n✅ Selected: {selected_category['category_name']}")
@@ -367,11 +521,17 @@ class CatchupGenerator:
 
         print(f"✅ Loaded {len(streams)} streams")
 
-        # Select stream
+        # Select stream (with cached default if same category)
+        default_stream = None
+        if self.cache.get('category_id') == selected_category['category_id']:
+            default_stream = self.cache.get('stream_id')
+
         selected_stream = self.select_from_list_interactive(
             streams,
             "Select a Stream:",
-            'name'
+            'name',
+            default_value=default_stream,
+            id_key='stream_id'
         )
 
         print(f"\n✅ Selected: {selected_stream['name']}")
@@ -380,9 +540,23 @@ class CatchupGenerator:
         selected_date = self.select_date()
         print(f"\n✅ Selected: {selected_date.strftime('%A, %Y-%m-%d')}")
 
-        # Get time in 24h format
-        hours, minutes = self.get_time_input()
+        # Get time in 24h format (with cached default if same stream)
+        default_time = None
+        if self.cache.get('stream_id') == selected_stream['stream_id']:
+            default_time = self.cache.get('time')
+
+        hours, minutes = self.get_time_input(default_time=default_time)
         print(f"✅ Selected time: {hours:02d}:{minutes:02d}")
+
+        # Save to cache
+        self.save_cache(
+            category_id=selected_category['category_id'],
+            category_name=selected_category['category_name'],
+            stream_id=selected_stream['stream_id'],
+            stream_name=selected_stream['name'],
+            date_str=selected_date.strftime('%Y-%m-%d'),
+            time_str=f"{hours:02d}{minutes:02d}"
+        )
 
         # Combine date and time
         start_dt = selected_date.replace(hour=hours, minute=minutes, second=0, microsecond=0)
@@ -436,11 +610,11 @@ class CatchupGenerator:
         print()
         while True:
             try:
-                download_choice = input("Do you want to download this file? (y/n) [n]: ").strip().lower()
-                if download_choice == '' or download_choice == 'n':
+                download_choice = input("Do you want to download this file? (y/n) [y]: ").strip().lower()
+                if download_choice == 'n':
                     print("👋 Goodbye!")
                     return
-                elif download_choice == 'y':
+                elif download_choice == '' or download_choice == 'y':
                     break
                 else:
                     print("⛔ Please enter 'y' or 'n'")
@@ -472,7 +646,7 @@ class CatchupGenerator:
             return
 
         # Download the file
-        success = self.download_file(url, filename)
+        success = self.download_file(url, filename, duration_minutes=duration)
 
         if success:
             # Automatically repair the file

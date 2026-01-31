@@ -9,7 +9,9 @@ A powerful command-line tool to generate and download catchup/timeshift content 
 ## Features
 
 - **Interactive keyboard navigation** with arrow keys (no scrolling needed!)
-- **Built-in file downloader** with progress bar
+- **Smart chunked downloads** - restarts every 10% to avoid server bandwidth throttling
+- **Session memory** - remembers your last category, channel, and time for 1 hour
+- **Built-in file downloader** with real-time speed monitoring
 - **Automatic TS file repair** with ffmpeg (fixes corrupted streams automatically)
 - Automatically filters streams to show only those with catchup/archive
 - Smart filename generation (StreamName_Day_Date_Time.ts)
@@ -149,6 +151,8 @@ The script guides you through:
 IPTV Catchup URL Generator
 ============================================================
 
+💡 Last session: BBC One (press Enter to reuse)
+
 Loading categories...
 ✅ Loaded 25 categories
 💡 Use arrow keys to navigate, Enter to select, q to quit
@@ -179,7 +183,7 @@ Select Date:
 
 ✅ Selected: Monday, 2026-01-27
 
-Enter time (24h format, e.g., 1745 for 5:45 PM): 2000
+Enter time (24h format, e.g., 1745 for 5:45 PM) [20:00]:
 ✅ Selected time: 20:00
 
 Duration (minutes) [default: 30]: 60
@@ -187,20 +191,29 @@ Duration (minutes) [default: 30]: 60
 ============================================================
 Generated Catchup URL:
 ============================================================
-http://beams-tv.online/timeshift/username/password/60/2026-01-27:20-00/12345.ts
+http://example.com/timeshift/username/password/60/2026-01-27:20-00/12345.ts
 ============================================================
 ✅ URL copied to clipboard!
 
-Do you want to download this file? (y/n) [n]: y
+Do you want to download this file? (y/n) [y]:
 
 Default filename: BBC_One_Monday_2026-01-27_2000.ts
 Enter filename (press Enter for default):
 
 Downloading: BBC_One_Monday_2026-01-27_2000.ts
+Restarting every 10% to avoid bandwidth throttling
 
-BBC_One_Monday_2026- 100%[===================>] 144.01M  11.0MB/s    in 17s
+Chunk 1: 0% -> 10%
+  Progress: 10% | Speed: 12.5MB/s | Chunk avg: 10.2 MB/s | Overall avg: 10.2 MB/s
+Chunk 2: 10% -> 20%
+  Progress: 20% | Speed: 11.8MB/s | Chunk avg: 9.8 MB/s | Overall avg: 10.0 MB/s
+...
+Chunk 10: 90% -> 100%
+  Progress: 100% | Speed: 10.5MB/s | Chunk avg: 9.5 MB/s | Overall avg: 9.8 MB/s
 
 ✅ Download complete: BBC_One_Monday_2026-01-27_2000.ts
+   Size: 3600.0 MB | Time: 368s | Avg speed: 9.8 MB/s
+   Chunks: 10 (restarted 9 times)
 
 Repairing file with ffmpeg...
 ✅ Repaired: BBC_One_Monday_2026-01-27_2000.ts
@@ -222,6 +235,26 @@ Repairing file with ffmpeg...
 The script automatically loads this from the same directory as the script itself, even when run via symlink.
 
 ## Features in Detail
+
+### Chunked Downloads (Anti-Throttling)
+
+Many IPTV servers throttle bandwidth after a portion of the file is downloaded. This tool automatically:
+
+- Restarts the download every 10% using wget's resume capability (`-c` flag)
+- Monitors download speed in real-time (current, chunk average, overall average)
+- Each restart resets the server's throttling, maintaining high speeds throughout
+
+This can significantly reduce download times for large recordings.
+
+### Session Memory
+
+The tool remembers your last selections for 1 hour:
+
+- **Category** - cursor starts on your last selected category
+- **Channel** - cursor starts on your last selected channel (if same category)
+- **Time** - shows your last entered time as default (if same channel)
+
+Just press Enter to reuse previous selections.
 
 ### Smart Date Selection
 
@@ -269,8 +302,9 @@ The repair is lossless (stream copy, no re-encoding) and typically very fast.
 
 ### Downloading
 
-- **wget** (preferred): Clean progress bar, better display
-- **urllib** (fallback): Built-in Python, works without wget
+- **wget** (required): Used for chunked downloads with resume capability
+- Automatically restarts every 10% to avoid server throttling
+- Shows real-time speed monitoring (current, chunk avg, overall avg)
 
 ### File Repair
 
@@ -289,6 +323,7 @@ The repair is lossless (stream copy, no re-encoding) and typically very fast.
 |-------|----------|
 | "Configuration file not found" | Make sure `config.json` exists in the same directory as the script |
 | "Failed to load categories" | Check your internet connection and API credentials |
+| "HTTP Error 403: Forbidden" | The script includes a browser User-Agent header; if still failing, check your credentials |
 | BST adjustment notification | Normal - script automatically adjusts for British Summer Time |
 | No arrow key navigation | Install `simple-term-menu`: `pip3 install simple-term-menu` |
 | "ffmpeg not installed" | Install with `brew install ffmpeg` (macOS) or `sudo apt install ffmpeg` (Ubuntu) |
@@ -318,6 +353,12 @@ Started with an HTML-based IPTV catchup URL generator and a request to create a 
 7. **System-Wide Access** → Modified config loading to resolve symlinks, enabling system-wide installation via `~/.local/bin/catchup`
 
 8. **Output Cleanup** → Reduced verbose wget output using `-q --show-progress` flags for cleaner, more professional display
+
+9. **Anti-Throttling** → Added chunked download strategy that restarts every 10% to avoid server bandwidth throttling, with real-time speed monitoring
+
+10. **Session Caching** → Implemented 1-hour session memory for category, channel, and time selections to speed up repeated downloads
+
+11. **User-Agent Fix** → Added browser User-Agent header to avoid 403 Forbidden errors from servers that block Python's default User-Agent
 
 ### Design Decisions
 
