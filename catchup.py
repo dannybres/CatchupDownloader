@@ -41,6 +41,9 @@ class CatchupGenerator:
             self.cache_file = os.path.join(os.path.dirname(config_file), ".catchup_cache.json")
         self.config = self.load_config()
         self.cache = self.load_cache()
+        self.api_base = self.config['baseURL']
+        self.archive_base = self.config.get('archiveBase', '')
+        self.fetch_server_info()
 
     def load_cache(self):
         """Load cached selections if they exist and are recent"""
@@ -86,7 +89,7 @@ class CatchupGenerator:
                 config = json.load(f)
 
             # Validate required fields
-            required = ['username', 'password', 'baseURL', 'archiveBase']
+            required = ['username', 'password', 'baseURL']
             missing = [field for field in required if field not in config]
             if missing:
                 print(f"⛔ Missing required fields in config: {', '.join(missing)}")
@@ -96,6 +99,36 @@ class CatchupGenerator:
         except json.JSONDecodeError as e:
             print(f"⛔ Invalid JSON in config file: {e}")
             sys.exit(1)
+
+    def fetch_server_info(self):
+        """Fetch server info from the API and build dynamic base URLs"""
+        url = f"{self.config['baseURL']}?username={self.config['username']}&password={self.config['password']}"
+        data = self.fetch_json(url)
+
+        if not data or 'server_info' not in data:
+            # Fall back to archiveBase from config if present
+            if 'archiveBase' in self.config:
+                print("⚠️  Could not fetch server info, using archiveBase from config")
+                self.archive_base = self.config['archiveBase']
+                self.api_base = self.config['baseURL']
+            else:
+                print("⛔ Could not fetch server info and no archiveBase in config")
+                sys.exit(1)
+            return
+
+        si = data['server_info']
+        protocol = si.get('server_protocol', 'http')
+        host = si.get('url', '')
+        port = si.get('port') if protocol == 'http' else si.get('https_port')
+
+        if not host or not port:
+            print("⛔ Server info missing url or port")
+            sys.exit(1)
+
+        base = f"{protocol}://{host}:{port}"
+        self.api_base = f"{base}/player_api.php"
+        self.archive_base = f"{base}/timeshift"
+        print(f"✅ Server: {base}")
 
     def fetch_json(self, url):
         """Fetch JSON data from URL"""
@@ -111,7 +144,7 @@ class CatchupGenerator:
 
     def get_categories(self):
         """Fetch available categories"""
-        url = f"{self.config['baseURL']}?username={self.config['username']}&password={self.config['password']}&action=get_live_categories"
+        url = f"{self.api_base}?username={self.config['username']}&password={self.config['password']}&action=get_live_categories"
         data = self.fetch_json(url)
 
         if not data:
@@ -122,7 +155,7 @@ class CatchupGenerator:
 
     def get_streams(self, category_id):
         """Fetch streams for a category (only those with catchup)"""
-        url = f"{self.config['baseURL']}?username={self.config['username']}&password={self.config['password']}&action=get_live_streams&category_id={category_id}"
+        url = f"{self.api_base}?username={self.config['username']}&password={self.config['password']}&action=get_live_streams&category_id={category_id}"
         data = self.fetch_json(url)
 
         if not data:
@@ -323,7 +356,7 @@ class CatchupGenerator:
             print("🇬🇧 BST detected – 1 hour was subtracted from the time.")
 
         start_str = self.format_start_time(start_datetime)
-        url = f"{self.config['archiveBase']}/{self.config['username']}/{self.config['password']}/{duration_minutes}/{start_str}/{stream_id}.ts"
+        url = f"{self.archive_base}/{self.config['username']}/{self.config['password']}/{duration_minutes}/{start_str}/{stream_id}.ts"
         return url
 
     def select_from_list_interactive(self, items, title, name_key='name', default_value=None, id_key=None):

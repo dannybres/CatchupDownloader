@@ -1,6 +1,5 @@
 {
   "username": "your_iptv_username",
   "password": "your_iptv_password",
-  "baseURL": "http://your-api-url.com/player_api.php",
-  "archiveBase": "http://your-archive-url.com/timeshift"
+  "baseURL": "http://your-api-url.com/player_api.php"
 }
