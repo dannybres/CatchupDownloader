@@ -1,8 +1,9 @@
 # Configuration with credentials
 config.json
 
-# Session cache
+# Session cache and resume state
 .catchup_cache.json
+.catchup_resume.json
 
 # Original HTML file with credentials
 b.html

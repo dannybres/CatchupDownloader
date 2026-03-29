@@ -26,7 +26,6 @@ except ImportError:
 
 
 class CatchupGenerator:
-    CACHE_EXPIRY_HOURS = 1
 
     def __init__(self, config_file="config.json"):
         # If relative path, look in the script's directory (resolve symlinks)
@@ -36,34 +35,75 @@ class CatchupGenerator:
             script_dir = os.path.dirname(script_path)
             self.config_file = os.path.join(script_dir, config_file)
             self.cache_file = os.path.join(script_dir, ".catchup_cache.json")
+            self.resume_file = os.path.join(script_dir, ".catchup_resume.json")
         else:
             self.config_file = config_file
             self.cache_file = os.path.join(os.path.dirname(config_file), ".catchup_cache.json")
+            self.resume_file = os.path.join(os.path.dirname(config_file), ".catchup_resume.json")
         self.config = self.load_config()
+        self.apply_proxy()
         self.cache = self.load_cache()
         self.api_base = self.config['baseURL']
         self.archive_base = self.config.get('archiveBase', '')
         self.fetch_server_info()
 
+    def apply_proxy(self):
+        """Set proxy env vars if configured"""
+        proxy = self.config.get('proxy')
+        if proxy:
+            os.environ['http_proxy'] = proxy
+            os.environ['https_proxy'] = proxy
+            print(f"🔒 Proxy: {proxy}")
+
     def load_cache(self):
-        """Load cached selections if they exist and are recent"""
+        """Load cached selections (category/channel) — no expiry"""
         if not os.path.exists(self.cache_file):
             return {}
         try:
             with open(self.cache_file, 'r') as f:
-                cache = json.load(f)
-            # Check if cache is expired
-            cached_time = datetime.fromisoformat(cache.get('timestamp', '2000-01-01'))
-            if datetime.now() - cached_time > timedelta(hours=self.CACHE_EXPIRY_HOURS):
-                return {}
-            return cache
+                return json.load(f)
         except (json.JSONDecodeError, ValueError):
             return {}
+
+    def load_resume(self):
+        """Load an incomplete download state if one exists"""
+        if not os.path.exists(self.resume_file):
+            return None
+        try:
+            with open(self.resume_file, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    def save_resume(self, url, filename, category_name, stream_name, date_str, time_str, duration):
+        """Save download state so it can be resumed on next run"""
+        state = {
+            'url': url,
+            'filename': filename,
+            'category_name': category_name,
+            'stream_name': stream_name,
+            'date': date_str,
+            'time': time_str,
+            'duration': duration,
+            'started_at': datetime.now().isoformat(),
+        }
+        try:
+            with open(self.resume_file, 'w') as f:
+                json.dump(state, f)
+        except Exception:
+            pass
+
+    def clear_resume(self):
+        """Clear the resume state after a successful download"""
+        try:
+            if os.path.exists(self.resume_file):
+                os.remove(self.resume_file)
+        except Exception:
+            pass
 
     def save_cache(self, category_id, category_name, stream_id, stream_name, date_str, time_str):
         """Save current selections to cache"""
         cache = {
-            'timestamp': datetime.now().isoformat(),
             'category_id': category_id,
             'category_name': category_name,
             'stream_id': stream_id,
@@ -396,37 +436,56 @@ class CatchupGenerator:
         return items[menu_entry_index]
 
     def select_from_list_fallback(self, items, title, name_key='name', default_value=None, id_key=None):
-        """Fallback selection for when simple-term-menu is not installed"""
-        # Find default index
+        """Fallback selection for when simple-term-menu is not installed, paginated 10 at a time"""
+        PAGE_SIZE = 10
+
+        # Find the default item's overall index (0-based)
         default_idx = None
         if default_value and id_key:
             for i, item in enumerate(items):
                 if item.get(id_key) == default_value:
-                    default_idx = i + 1
+                    default_idx = i
                     break
 
-        print(f"\n{title}")
-        print("-" * 60)
-        for idx, item in enumerate(items, 1):
-            marker = " *" if idx == default_idx else ""
-            print(f"  {idx}. {item[name_key]}{marker}")
-        print()
-
-        prompt = f"Select (1-{len(items)})"
-        if default_idx:
-            prompt += f" [default: {default_idx}]"
-        prompt += ": "
+        offset = 0
+        # Start the page that contains the default item
+        if default_idx is not None:
+            offset = (default_idx // PAGE_SIZE) * PAGE_SIZE
 
         while True:
+            page = items[offset:offset + PAGE_SIZE]
+            has_more = (offset + PAGE_SIZE) < len(items)
+
+            print(f"\n{title}")
+            print("-" * 60)
+            for i, item in enumerate(page):
+                overall = offset + i
+                marker = " *" if overall == default_idx else ""
+                print(f"  {i + 1}. {item[name_key]}{marker}")
+            if has_more:
+                print(f"  11. Show more ({len(items) - offset - PAGE_SIZE} remaining)...")
+            print()
+
+            max_choice = 11 if has_more else PAGE_SIZE
+            prompt = f"Select (1-{min(PAGE_SIZE, len(page))}{', 11=more' if has_more else ''})"
+            if default_idx is not None and (offset <= default_idx < offset + PAGE_SIZE):
+                prompt += f" [default: {default_idx - offset + 1}]"
+            prompt += ": "
+
             try:
                 choice = input(prompt).strip()
-                if not choice and default_idx:
-                    return items[default_idx - 1]
-                idx = int(choice) - 1
-                if 0 <= idx < len(items):
-                    return items[idx]
+                if not choice and default_idx is not None and (offset <= default_idx < offset + PAGE_SIZE):
+                    return items[default_idx]
+                val = int(choice)
+                if val == 11 and has_more:
+                    offset += PAGE_SIZE
+                    continue
+                if 1 <= val <= len(page):
+                    return page[val - 1]
                 print("⛔ Invalid selection. Please try again.")
-            except (ValueError, KeyboardInterrupt):
+            except ValueError:
+                print("⛔ Please enter a number.")
+            except KeyboardInterrupt:
                 print("\n👋 Goodbye!")
                 sys.exit(0)
 
@@ -520,6 +579,30 @@ class CatchupGenerator:
         print("IPTV Catchup URL Generator")
         print("=" * 60)
         print()
+
+        # Check for an incomplete download and offer to resume
+        resume = self.load_resume()
+        if resume:
+            print("⚠️  An incomplete download was found:")
+            print(f"   Channel  : {resume.get('stream_name', '?')}")
+            print(f"   File     : {resume.get('filename', '?')}")
+            print(f"   Date/Time: {resume.get('date', '?')} {resume.get('time', '?')}")
+            print(f"   Duration : {resume.get('duration', '?')} min")
+            print()
+            try:
+                choice = input("Resume this download? (y/n) [y]: ").strip().lower()
+            except KeyboardInterrupt:
+                print("\n👋 Goodbye!")
+                return
+            if choice in ('', 'y'):
+                success = self.download_file(resume['url'], resume['filename'], duration_minutes=resume['duration'])
+                if success:
+                    self.clear_resume()
+                    self.repair_ts_file(resume['filename'])
+                return
+            else:
+                self.clear_resume()
+            print()
 
         # Show cache info if available
         if self.cache:
@@ -678,10 +761,22 @@ class CatchupGenerator:
             print("\n👋 Goodbye!")
             return
 
+        # Save resume state before starting — cleared on success
+        self.save_resume(
+            url=url,
+            filename=filename,
+            category_name=selected_category['category_name'],
+            stream_name=selected_stream['name'],
+            date_str=selected_date.strftime('%Y-%m-%d'),
+            time_str=f"{hours:02d}{minutes:02d}",
+            duration=duration,
+        )
+
         # Download the file
         success = self.download_file(url, filename, duration_minutes=duration)
 
         if success:
+            self.clear_resume()
             # Automatically repair the file
             self.repair_ts_file(filename)
 

@@ -1,390 +1,188 @@
 # IPTV Catchup Downloader
 
-A powerful command-line tool to generate and download catchup/timeshift content from IPTV services with automatic stream repair.
+A command-line tool to generate and download catchup/timeshift recordings from IPTV services using the Xtream Codes API.
 
-![Python](https://img.shields.io/badge/python-3.6+-blue.svg)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Ubuntu-lightgrey.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+Works on macOS and Ubuntu.
+
+---
 
 ## Features
 
-- **Interactive keyboard navigation** with arrow keys (no scrolling needed!)
-- **Smart chunked downloads** - restarts every 10% to avoid server bandwidth throttling
-- **Session memory** - remembers your last category, channel, and time for 1 hour
-- **Built-in file downloader** with real-time speed monitoring
-- **Automatic TS file repair** with ffmpeg (fixes corrupted streams automatically)
-- Automatically filters streams to show only those with catchup/archive
-- Smart filename generation (StreamName_Day_Date_Time.ts)
-- **BST (British Summer Time) detection** and automatic adjustment
-- Clipboard support on macOS and Linux
-- JSON configuration file for easy credential management
-- Fallback mode if interactive library not installed
-- **Run from anywhere** - install once, use everywhere
+- Interactive arrow-key menus (requires `simple-term-menu`) with paginated numbered fallback
+- Remembers last used category and channel permanently across sessions
+- Auto-resume: if a download is interrupted, you are offered to resume it on next launch
+- Chunked downloads — restarts every 10% to avoid server-side bandwidth throttling
+- Automatic post-download TS file repair using ffmpeg
+- BST (British Summer Time) auto-detection — adjusts timestamps automatically
+- URL copied to clipboard after generation
+- Proxy support via `config.json` (for VPN/proxy setups on Ubuntu)
 
-## Quick Start
-
-```bash
-# Install dependencies
-pip3 install simple-term-menu
-
-# Configure your credentials
-cp config.json.example config.json
-# Edit config.json with your IPTV credentials
-
-# Run
-python3 catchup.py
-```
-
-Or install system-wide:
-```bash
-mkdir -p ~/.local/bin
-ln -sf "$(pwd)/catchup.py" ~/.local/bin/catchup
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bash_profile
-source ~/.bash_profile
-
-# Now run from anywhere
-catchup
-```
+---
 
 ## Requirements
 
-- Python 3.6 or higher
-- Internet connection
-- Optional but recommended:
-  - `simple-term-menu` - for interactive keyboard navigation
-  - `wget` - for better download progress display
-  - `ffmpeg` - for automatic stream repair
+| Tool    | macOS                  | Ubuntu                      |
+|---------|------------------------|-----------------------------|
+| Python  | 3.9+                   | 3.9+                        |
+| wget    | `brew install wget`    | `sudo apt install wget`     |
+| ffmpeg  | `brew install ffmpeg`  | `sudo apt install ffmpeg`   |
+| xclip   | not needed             | `sudo apt install xclip`    |
 
-## Installation
+---
 
-### 1. Install Python Dependencies
+## Setup
 
-```bash
-pip3 install simple-term-menu
-```
+### macOS
 
-*Note: The script will work without this, but you'll get a better interactive experience with arrow key navigation.*
-
-### 2. Install Optional Tools
-
-**macOS:**
 ```bash
 brew install wget ffmpeg
+pip3 install simple-term-menu
+cp config.json.example config.json
+# edit config.json with your credentials
+python3 catchup.py
 ```
 
-**Ubuntu/Debian:**
+### Ubuntu
+
 ```bash
 sudo apt install wget ffmpeg xclip
+bash setup_ubuntu.sh        # creates venv and installs simple-term-menu
+cp config.json.example config.json
+# edit config.json with your credentials
+venv/bin/python3 catchup.py
 ```
 
-### 3. Configure Credentials
+If you move the project directory, re-run `bash setup_ubuntu.sh` to recreate the venv.
 
-Edit `config.json` with your IPTV credentials:
+---
 
+## config.json
+
+Create from the example file. It is gitignored and never committed.
+
+**macOS (no proxy):**
 ```json
 {
+  "baseURL": "http://your-provider.com/player_api.php",
   "username": "your_username",
-  "password": "your_password",
-  "baseURL": "http://your-api-url.com/player_api.php",
-  "archiveBase": "http://your-archive-url.com/timeshift"
+  "password": "your_password"
 }
 ```
 
-### 4. Make Script Executable
-
-```bash
-chmod +x catchup.py
+**Ubuntu with VPN proxy:**
+```json
+{
+  "baseURL": "http://your-provider.com/player_api.php",
+  "username": "your_username",
+  "password": "your_password",
+  "proxy": "http://localhost:8888"
+}
 ```
 
-### 5. Install System-Wide (Optional)
+If `proxy` is present, it is applied automatically at startup. Leave it out on machines that don't need it.
 
-To run `catchup` from anywhere:
-
-```bash
-# Create local bin directory
-mkdir -p ~/.local/bin
-
-# Create symlink
-ln -sf "/full/path/to/catchup.py" ~/.local/bin/catchup
-
-# Add to PATH (bash)
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bash_profile
-source ~/.bash_profile
-
-# Or for zsh
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-```
+---
 
 ## Usage
 
-### Run Directly
+Run the script and follow the prompts:
 
-```bash
-python3 catchup.py
-# or
-./catchup.py
-```
+1. Select a category
+2. Select a channel (only catchup-enabled channels are shown)
+3. Select a date (last 7 days)
+4. Enter a start time in 24h format — e.g. `1745` for 17:45
+5. Enter a duration in minutes (default: 30)
+6. The catchup URL is generated and copied to clipboard
+7. Choose whether to download
+8. Optionally customise the filename
+9. Download runs with progress display, then auto-repairs with ffmpeg
 
-### Run System-Wide
+### Resume interrupted downloads
 
-```bash
-catchup
-```
-
-### Interactive Workflow
-
-The script guides you through:
-
-1. **Select Category** - Arrow keys to browse IPTV categories
-2. **Select Stream** - Choose from available catchup-enabled streams
-3. **Select Date** - Pick from last 7 days (shows day of week prominently)
-4. **Enter Time** - 24h format, no colon (e.g., `1745` for 5:45 PM)
-5. **Enter Duration** - In minutes (default: 30)
-6. **Download** - Optional download with smart filename
-7. **Auto-Repair** - Automatic ffmpeg repair of downloaded file
-
-### Example Session
+If a download is interrupted (crash, Ctrl+C, network drop), on the next launch:
 
 ```
-============================================================
-IPTV Catchup URL Generator
-============================================================
+⚠️  An incomplete download was found:
+   Channel  : Sky Sports Main Event
+   File     : Sky_Sports_Main_Event_Sunday_2026-03-29_1400.ts
+   Date/Time: 2026-03-29 1400
+   Duration : 90 min
 
-💡 Last session: BBC One (press Enter to reuse)
-
-Loading categories...
-✅ Loaded 25 categories
-💡 Use arrow keys to navigate, Enter to select, q to quit
-
-Select a Category:
-  ➤ UK Entertainment │ HD
-    Sports │ Live Events
-    Movies │ On Demand
-    ...
-
-✅ Selected: UK Entertainment │ HD
-Loading streams with catchup...
-✅ Loaded 42 streams
-
-Select a Stream:
-  ➤ BBC One
-    BBC Two
-    ITV
-    ...
-
-✅ Selected: BBC One
-
-Select Date:
-  ➤ Monday - 2026-01-27
-    Sunday - 2026-01-26
-    Saturday - 2026-01-25
-    ...
-
-✅ Selected: Monday, 2026-01-27
-
-Enter time (24h format, e.g., 1745 for 5:45 PM) [20:00]:
-✅ Selected time: 20:00
-
-Duration (minutes) [default: 30]: 60
-
-============================================================
-Generated Catchup URL:
-============================================================
-http://example.com/timeshift/username/password/60/2026-01-27:20-00/12345.ts
-============================================================
-✅ URL copied to clipboard!
-
-Do you want to download this file? (y/n) [y]:
-
-Default filename: BBC_One_Monday_2026-01-27_2000.ts
-Enter filename (press Enter for default):
-
-Downloading: BBC_One_Monday_2026-01-27_2000.ts
-Restarting every 10% to avoid bandwidth throttling
-
-Chunk 1: 0% -> 10%
-  Progress: 10% | Speed: 12.5MB/s | Chunk avg: 10.2 MB/s | Overall avg: 10.2 MB/s
-Chunk 2: 10% -> 20%
-  Progress: 20% | Speed: 11.8MB/s | Chunk avg: 9.8 MB/s | Overall avg: 10.0 MB/s
-...
-Chunk 10: 90% -> 100%
-  Progress: 100% | Speed: 10.5MB/s | Chunk avg: 9.5 MB/s | Overall avg: 9.8 MB/s
-
-✅ Download complete: BBC_One_Monday_2026-01-27_2000.ts
-   Size: 3600.0 MB | Time: 368s | Avg speed: 9.8 MB/s
-   Chunks: 10 (restarted 9 times)
-
-Repairing file with ffmpeg...
-✅ Repaired: BBC_One_Monday_2026-01-27_2000.ts
+Resume this download? (y/n) [y]:
 ```
 
-## Configuration
+Press Enter to resume from where it left off using wget's `-c` flag.
 
-### config.json Structure
+---
 
-```json
-{
-  "username": "your_iptv_username",
-  "password": "your_iptv_password",
-  "baseURL": "http://your-api-url.com/player_api.php",
-  "archiveBase": "http://your-archive-url.com/timeshift"
-}
+## File structure
+
+```
+CatchupDownloader/
+  catchup.py             main script
+  setup_ubuntu.sh        one-time venv setup for Ubuntu
+  config.json.example    example config (commit this)
+  config.json            your credentials (gitignored, create manually)
+  .catchup_cache.json    last used category/channel (auto-created, gitignored)
+  .catchup_resume.json   incomplete download state (auto-created/deleted, gitignored)
+venv/                    Python venv for Ubuntu (created by setup_ubuntu.sh, gitignored)
 ```
 
-The script automatically loads this from the same directory as the script itself, even when run via symlink.
-
-## Features in Detail
-
-### Chunked Downloads (Anti-Throttling)
-
-Many IPTV servers throttle bandwidth after a portion of the file is downloaded. This tool automatically:
-
-- Restarts the download every 10% using wget's resume capability (`-c` flag)
-- Monitors download speed in real-time (current, chunk average, overall average)
-- Each restart resets the server's throttling, maintaining high speeds throughout
-
-This can significantly reduce download times for large recordings.
-
-### Session Memory
-
-The tool remembers your last selections for 1 hour:
-
-- **Category** - cursor starts on your last selected category
-- **Channel** - cursor starts on your last selected channel (if same category)
-- **Time** - shows your last entered time as default (if same channel)
-
-Just press Enter to reuse previous selections.
-
-### Smart Date Selection
-
-- Shows last 7 days in reverse chronological order (today first)
-- Displays day of week prominently (more important than date for TV scheduling)
-- Format: `Monday - 2026-01-27`
-
-### Time Input
-
-- 24-hour format without colon: `1745` for 5:45 PM
-- Accepts 3 or 4 digits (`945` becomes `0945`)
-- Automatically strips colons if entered
-
-### Filename Generation
-
-Default format: `StreamName_DayOfWeek_YYYY-MM-DD_HHMM.ts`
-
-Example: `BBC_One_Monday_2026-01-27_2000.ts`
-
-- Automatically sanitizes invalid characters
-- Preserves channel name and timing info
-- Always adds `.ts` extension
-
-### BST Detection
-
-Automatically detects British Summer Time and adjusts the time by subtracting 1 hour when needed. Displays notification when adjustment occurs.
-
-### Automatic Repair
-
-After download, the script automatically repairs the TS file using:
-
-```bash
-ffmpeg -err_detect ignore_err -fflags +genpts -i input.ts -map 0 -c copy output.ts
-```
-
-This fixes:
-- Corrupted packets
-- Missing timestamps
-- Discontinuities in the stream
-- Other common IPTV stream issues
-
-The repair is lossless (stream copy, no re-encoding) and typically very fast.
-
-## Download & Repair Support
-
-### Downloading
-
-- **wget** (required): Used for chunked downloads with resume capability
-- Automatically restarts every 10% to avoid server throttling
-- Shows real-time speed monitoring (current, chunk avg, overall avg)
-
-### File Repair
-
-- **ffmpeg** required for automatic repair
-- If not installed, download still works but repair is skipped
-- Install: `brew install ffmpeg` (macOS) or `sudo apt install ffmpeg` (Ubuntu)
-
-### Clipboard
-
-- **macOS**: Automatic (pbcopy)
-- **Linux**: Requires `xclip` or `xsel`
+---
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| "Configuration file not found" | Make sure `config.json` exists in the same directory as the script |
-| "Failed to load categories" | Check your internet connection and API credentials |
-| "HTTP Error 403: Forbidden" | The script includes a browser User-Agent header; if still failing, check your credentials |
-| BST adjustment notification | Normal - script automatically adjusts for British Summer Time |
-| No arrow key navigation | Install `simple-term-menu`: `pip3 install simple-term-menu` |
-| "ffmpeg not installed" | Install with `brew install ffmpeg` (macOS) or `sudo apt install ffmpeg` (Ubuntu) |
-| No clipboard support (Linux) | Install `xclip`: `sudo apt install xclip` |
+| Issue | Fix |
+|---|---|
+| No arrow-key menus on Ubuntu | Run `bash setup_ubuntu.sh`, then use `venv/bin/python3 catchup.py` |
+| 403 Forbidden errors | Check credentials in `config.json` |
+| Download stalls | Ctrl+C and relaunch — resume will be offered |
+| BST adjustment message | Expected — time is auto-adjusted for British Summer Time |
+| ffmpeg not found | `brew install ffmpeg` / `sudo apt install ffmpeg` |
+| No clipboard on Linux | `sudo apt install xclip` |
 
-## Development Story
+---
 
-This tool was developed through an iterative, user-driven design process using Claude Code. Here's how it evolved:
+## Design Decisions & Development History
 
-### Initial Request
-Started with an HTML-based IPTV catchup URL generator and a request to create a command-line equivalent with the same functionality and configuration management.
+This tool was built iteratively. The decisions below explain why things are the way they are.
 
-### Key Development Iterations
+### Key iterations
 
-1. **Base Implementation** → Created Python script with JSON config, API integration for categories/streams, URL generation with BST detection
+1. **Base implementation** — Python script with JSON config, Xtream Codes API integration for categories/streams, URL generation with BST detection.
 
-2. **Interactive Menus** → Added `simple-term-menu` for arrow-key navigation, eliminating scrolling through long lists. Fixed issue where pipe characters (`|`) in category names were being interpreted as column separators.
+2. **Interactive menus** — Added `simple-term-menu` for arrow-key navigation. Fixed an issue where pipe characters (`|`) in category names were being interpreted as column separators by the menu library.
 
-3. **Smart Date Selection** → Changed from manual date entry to menu-based selection showing last 7 days in reverse order, prominently displaying day of week (more important than dates for TV schedules)
+3. **Smart date selection** — Changed from manual date entry to a menu showing the last 7 days in reverse order, with day of week shown prominently. Day of week is more useful than the date alone when thinking about TV schedules.
 
-4. **Time Format Optimization** → Switched to 4-digit 24h format (e.g., `1745`) without colons for faster input
+4. **Time format** — Switched to 4-digit 24h input (e.g. `1745`) without colons. Faster to type, less error-prone.
 
-5. **Download Integration** → Added built-in downloader with smart filename generation (`ChannelName_DayOfWeek_Date_Time.ts`), using wget when available with clean progress display
+5. **Download integration** — Added built-in downloader using wget with smart filename generation (`ChannelName_DayOfWeek_Date_Time.ts`).
 
-6. **Automatic Repair** → Integrated ffmpeg-based TS file repair to fix corrupted streams, packet issues, and timestamp problems. Made automatic (no prompt) per user request.
+6. **Automatic TS repair** — Integrated ffmpeg repair after every download to fix corrupted packets, missing timestamps, and discontinuities. Made fully automatic (no prompt) — lossless stream copy, no re-encoding.
 
-7. **System-Wide Access** → Modified config loading to resolve symlinks, enabling system-wide installation via `~/.local/bin/catchup`
+7. **System-wide access** — Config loading resolves symlinks so the script works when installed via `~/.local/bin/catchup`.
 
-8. **Output Cleanup** → Reduced verbose wget output using `-q --show-progress` flags for cleaner, more professional display
+8. **Anti-throttling chunked downloads** — Many IPTV servers throttle bandwidth partway through a download. The downloader restarts wget every 10% using the `-c` resume flag, which resets the server's throttle counter. Real-time speed stats (current, chunk average, overall average) show this working.
 
-9. **Anti-Throttling** → Added chunked download strategy that restarts every 10% to avoid server bandwidth throttling, with real-time speed monitoring
+9. **Session memory** — The app remembers your last category, channel, and time. Originally had a 1-hour expiry; removed entirely — there's no reason for these defaults to expire.
 
-10. **Session Caching** → Implemented 1-hour session memory for category, channel, and time selections to speed up repeated downloads
+10. **User-Agent header** — Added a browser User-Agent to all API requests to avoid 403 errors from servers that block Python's default `urllib` agent.
 
-11. **User-Agent Fix** → Added browser User-Agent header to avoid 403 Forbidden errors from servers that block Python's default User-Agent
+11. **Dynamic server discovery** — Server URL and port are now fetched from the Xtream Codes `player_api.php` endpoint at startup rather than being hardcoded in config. Falls back to `archiveBase` in config if the API call fails.
 
-### Design Decisions
+12. **Auto-resume** — A `.catchup_resume.json` state file is written before every download and deleted on success. On the next launch, if it exists, the user is offered a resume prompt before the normal selection flow begins.
 
-- **JSON over plain text config**: Better handling of special characters in passwords, easier programmatic parsing, less prone to errors
-- **Interactive mode as default**: More user-friendly than command-line arguments for this use case
-- **Automatic repair**: User prefers seamless workflow without prompts
-- **Day of week prominent**: More natural for TV scheduling than dates alone
-- **No colons in time**: Faster to type, fewer keystrokes
-- **Symlink-aware config**: Enables system-wide installation while keeping config in one place
+13. **Proxy via config** — Originally there was a separate `runViaVPN.py` wrapper that set proxy env vars and launched the script using a venv Python. Replaced with a `proxy` key in `config.json` — cleaner, one entry point, machine differences stay in config.
 
-### Technologies Used
+14. **Ubuntu venv** — `simple-term-menu` can't be installed system-wide on Ubuntu without `--break-system-packages` (Debian externally-managed-environment restriction). `pipx` was tried but installs into an isolated env the system Python can't import from. Solution: a local venv at `../venv`, created by `setup_ubuntu.sh`, used explicitly via `venv/bin/python3`.
 
-- **Python 3.6+**: Core language
-- **simple-term-menu**: Interactive arrow-key menus
-- **urllib/wget**: File downloading
-- **ffmpeg**: Stream repair
-- **JSON**: Configuration storage
+15. **Fallback pagination** — When `simple-term-menu` is not installed, the numbered list fallback now shows 10 items at a time with option 11 to load more. Previously dumped all items at once which was unusable with large category/channel lists.
 
-## License
+### Design principles
 
-MIT License - feel free to use and modify as needed.
-
-## Contributing
-
-Contributions welcome! Please feel free to submit a Pull Request.
-
-## Author
-
-Created with Claude Code through iterative development and user feedback.
+- **One file**: Everything lives in `catchup.py`. No modules, no packages.
+- **Config over arguments**: Machine differences (proxy, credentials) live in `config.json`, not CLI flags.
+- **No prompts for automatic steps**: Repair runs automatically after download. No confirmation needed.
+- **JSON config**: Handles special characters in passwords reliably; easier to read and edit than env files.
+- **Symlink-aware**: `os.path.realpath(__file__)` ensures config and cache files are always found next to the real script, not the symlink.

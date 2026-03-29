@@ -1,5 +1,7 @@
 {
   "username": "your_iptv_username",
   "password": "your_iptv_password",
-  "baseURL": "http://your-api-url.com/player_api.php"
+  "baseURL": "http://your-api-url.com/player_api.php",
+
+  "proxy": "http://localhost:8888"
 }
